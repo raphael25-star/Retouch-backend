@@ -8,7 +8,32 @@ export default async function handler(req, res) {
   if (!API_KEY) return res.status(500).json({ error: "API key not configured" });
   try {
     const { model, input } = req.body;
-    const r1 = await fetch("https://api.kie.ai/api/v1/jobs/createTask", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ model, input }) });
+    let finalInput = { ...input };
+    if (input.image_urls && input.image_urls.length > 0) {
+      const uploadedUrls = [];
+      for (const img of input.image_urls) {
+        if (img.startsWith("data:")) {
+          const uploadRes = await fetch("https://kieai.redpandaai.co/api/upload/base64", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64: img, fileName: "retouch-" + Date.now() + ".png" }) });
+          const uploadData = await uploadRes.json();
+          if (uploadData.data?.fileUrl) { uploadedUrls.push(uploadData.data.fileUrl); }
+          else { return res.status(400).json({ error: "Image upload failed" }); }
+        } else { uploadedUrls.push(img); }
+      }
+      finalInput.image_urls = uploadedUrls;
+    }
+    if (input.image_input && input.image_input.length > 0) {
+      const uploadedInputs = [];
+      for (const img of input.image_input) {
+        if (img.startsWith && img.startsWith("data:")) {
+          const uploadRes = await fetch("https://kieai.redpandaai.co/api/upload/base64", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64: img, fileName: "retouch-" + Date.now() + ".png" }) });
+          const uploadData = await uploadRes.json();
+          if (uploadData.data?.fileUrl) { uploadedInputs.push(uploadData.data.fileUrl); }
+          else { return res.status(400).json({ error: "Image upload failed" }); }
+        } else { uploadedInputs.push(img); }
+      }
+      finalInput.image_input = uploadedInputs;
+    }
+    const r1 = await fetch("https://api.kie.ai/api/v1/jobs/createTask", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ model, input: finalInput }) });
     const d1 = await r1.json();
     const taskId = d1.data?.taskId || d1.data?.task_id;
     if (!taskId) return res.status(400).json({ error: d1.msg || d1.message || JSON.stringify(d1) });
