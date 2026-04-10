@@ -13,10 +13,10 @@ export default async function handler(req, res) {
       const uploadedUrls = [];
       for (const img of input.image_urls) {
         if (img.startsWith("data:")) {
-          const uploadRes = await fetch("https://kieai.redpandaai.co/api/upload/base64", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64: img, fileName: "retouch-" + Date.now() + ".png" }) });
+          const uploadRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64Data: img, uploadPath: "images/retouch", fileName: "retouch-" + Date.now() + ".png" }) });
           const uploadData = await uploadRes.json();
-          if (uploadData.data?.fileUrl) { uploadedUrls.push(uploadData.data.fileUrl); }
-          else { return res.status(400).json({ error: "Image upload failed" }); }
+          if (uploadData.data?.downloadUrl) { uploadedUrls.push(uploadData.data.downloadUrl); }
+          else { return res.status(400).json({ error: "Image upload failed: " + (uploadData.msg || JSON.stringify(uploadData)) }); }
         } else { uploadedUrls.push(img); }
       }
       finalInput.image_urls = uploadedUrls;
@@ -25,10 +25,10 @@ export default async function handler(req, res) {
       const uploadedInputs = [];
       for (const img of input.image_input) {
         if (img.startsWith && img.startsWith("data:")) {
-          const uploadRes = await fetch("https://kieai.redpandaai.co/api/upload/base64", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64: img, fileName: "retouch-" + Date.now() + ".png" }) });
+          const uploadRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64Data: img, uploadPath: "images/retouch", fileName: "retouch-" + Date.now() + ".png" }) });
           const uploadData = await uploadRes.json();
-          if (uploadData.data?.fileUrl) { uploadedInputs.push(uploadData.data.fileUrl); }
-          else { return res.status(400).json({ error: "Image upload failed" }); }
+          if (uploadData.data?.downloadUrl) { uploadedInputs.push(uploadData.data.downloadUrl); }
+          else { return res.status(400).json({ error: "Image upload failed: " + (uploadData.msg || JSON.stringify(uploadData)) }); }
         } else { uploadedInputs.push(img); }
       }
       finalInput.image_input = uploadedInputs;
