@@ -8,21 +8,23 @@ export default async function handler(req, res) {
   if (!API_KEY) return res.status(500).json({ error: "API key not configured" });
   try {
     const { model, input } = req.body;
-    const r1 = await fetch("https://api.kie.ai/api/v1/task", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ model, input }) });
+    const r1 = await fetch("https://api.kie.ai/api/v1/jobs/createTask", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ model, input }) });
     const d1 = await r1.json();
-    if (d1.code !== 0 || !d1.data?.task_id) return res.status(400).json({ error: d1.message || "Task creation failed" });
-    const taskId = d1.data.task_id;
+    const taskId = d1.data?.taskId || d1.data?.task_id;
+    if (!taskId) return res.status(400).json({ error: d1.msg || d1.message || JSON.stringify(d1) });
     let result = null;
     let attempts = 0;
     while (!result && attempts < 60) {
       await new Promise(r => setTimeout(r, 3000));
-      const r2 = await fetch("https://api.kie.ai/api/v1/task/" + taskId, { headers: { "Authorization": "Bearer " + API_KEY } });
+      const r2 = await fetch("https://api.kie.ai/api/v1/jobs/" + taskId, { headers: { "Authorization": "Bearer " + API_KEY } });
       const d2 = await r2.json();
-      if (d2.data?.status === "completed" && d2.data?.output?.image_url) result = d2.data.output.image_url;
+      const output = d2.data?.output;
+      if (output?.image_url) { result = output.image_url; }
+      else if (Array.isArray(output?.images) && output.images.length > 0) { result = output.images[0].url || output.images[0]; }
       else if (d2.data?.status === "failed") return res.status(500).json({ error: "Generation failed" });
       attempts++;
     }
     if (!result) return res.status(504).json({ error: "Timeout" });
     return res.status(200).json({ image_url: result });
-  } catch (err) { return res.status(500).json({ error: "Server error" }); }
+  } catch (err) { return res.status(500).json({ error: "Server error: " + err.message }); }
 }
