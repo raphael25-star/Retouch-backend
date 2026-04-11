@@ -13,10 +13,10 @@ export default async function handler(req, res) {
       const uploadedUrls = [];
       for (const img of input.image_urls) {
         if (img.startsWith("data:")) {
-          const uploadRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64Data: img, uploadPath: "images/retouch", fileName: "retouch-" + Date.now() + ".png" }) });
-          const uploadData = await uploadRes.json();
-          if (uploadData.data?.downloadUrl) { uploadedUrls.push(uploadData.data.downloadUrl); }
-          else { return res.status(400).json({ error: "Image upload failed: " + (uploadData.msg || JSON.stringify(uploadData)) }); }
+          const upRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64Data: img, uploadPath: "images/retouch", fileName: "retouch-" + Date.now() + ".png" }) });
+          const upData = await upRes.json();
+          if (upData.data?.downloadUrl) { uploadedUrls.push(upData.data.downloadUrl); }
+          else { return res.status(400).json({ error: "Upload failed" }); }
         } else { uploadedUrls.push(img); }
       }
       finalInput.image_urls = uploadedUrls;
@@ -25,10 +25,10 @@ export default async function handler(req, res) {
       const uploadedInputs = [];
       for (const img of input.image_input) {
         if (img.startsWith && img.startsWith("data:")) {
-          const uploadRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64Data: img, uploadPath: "images/retouch", fileName: "retouch-" + Date.now() + ".png" }) });
-          const uploadData = await uploadRes.json();
-          if (uploadData.data?.downloadUrl) { uploadedInputs.push(uploadData.data.downloadUrl); }
-          else { return res.status(400).json({ error: "Image upload failed: " + (uploadData.msg || JSON.stringify(uploadData)) }); }
+          const upRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", { method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY }, body: JSON.stringify({ base64Data: img, uploadPath: "images/retouch", fileName: "retouch-" + Date.now() + ".png" }) });
+          const upData = await upRes.json();
+          if (upData.data?.downloadUrl) { uploadedInputs.push(upData.data.downloadUrl); }
+          else { return res.status(400).json({ error: "Upload failed" }); }
         } else { uploadedInputs.push(img); }
       }
       finalInput.image_input = uploadedInputs;
@@ -41,12 +41,18 @@ export default async function handler(req, res) {
     let attempts = 0;
     while (!result && attempts < 60) {
       await new Promise(r => setTimeout(r, 3000));
-      const r2 = await fetch("https://api.kie.ai/api/v1/jobs/" + taskId, { headers: { "Authorization": "Bearer " + API_KEY } });
+      const r2 = await fetch("https://api.kie.ai/api/v1/jobs/recordInfo?taskId=" + taskId, { headers: { "Authorization": "Bearer " + API_KEY } });
       const d2 = await r2.json();
-      const output = d2.data?.output;
-      if (output?.image_url) { result = output.image_url; }
-      else if (Array.isArray(output?.images) && output.images.length > 0) { result = output.images[0].url || output.images[0]; }
-      else if (d2.data?.status === "failed") return res.status(500).json({ error: "Generation failed" });
+      if (d2.data?.state === "success" && d2.data?.resultJson) {
+        try {
+          const parsed = JSON.parse(d2.data.resultJson);
+          if (parsed.resultUrls && parsed.resultUrls.length > 0) { result = parsed.resultUrls[0]; }
+          else if (parsed.image_url) { result = parsed.image_url; }
+          else { result = d2.data.resultJson; }
+        } catch(e) { result = d2.data.resultJson; }
+      } else if (d2.data?.state === "fail") {
+        return res.status(500).json({ error: d2.data?.failMsg || "Generation failed" });
+      }
       attempts++;
     }
     if (!result) return res.status(504).json({ error: "Timeout" });
