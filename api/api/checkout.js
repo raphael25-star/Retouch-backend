@@ -18,10 +18,9 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  // Vérifier l'utilisateur
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Non authentifié" });
+    return res.status(401).json({ error: "Non authentifie" });
   }
   const token = authHeader.replace("Bearer ", "");
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
@@ -29,13 +28,10 @@ export default async function handler(req, res) {
 
   try {
     const { priceId } = req.body;
-
-    // Vérifier que le priceId est valide
     if (!PRICE_MAP[priceId]) {
       return res.status(400).json({ error: "Prix invalide" });
     }
 
-    // Créer la session Stripe Checkout
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
