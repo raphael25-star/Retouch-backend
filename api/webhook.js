@@ -1,33 +1,20 @@
-import Stripe from "stripe";
-import { createClient } from "@supabase/supabase-js";
+const Stripe = require("stripe");
+const { createClient } = require("@supabase/supabase-js");
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
-export const config = {
-  api: { bodyParser: false },
-};
-
-async function buffer(readable) {
-  const chunks = [];
-  for await (const chunk of readable) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
 
-  const buf = await buffer(req);
   const sig = req.headers["stripe-signature"];
 
   let event;
   try {
-    if (process.env.STRIPE_WEBHOOK_SECRET) {
-      event = stripe.webhooks.constructEvent(buf, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    if (process.env.STRIPE_WEBHOOK_SECRET && sig) {
+      event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
     } else {
-      event = JSON.parse(buf.toString());
+      event = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
     }
   } catch (err) {
     return res.status(400).json({ error: "Webhook Error: " + err.message });
@@ -55,7 +42,6 @@ export default async function handler(req, res) {
   if (event.type === "invoice.paid") {
     const invoice = event.data.object;
     const subscriptionId = invoice.subscription;
-
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const userId = subscription.metadata?.userId;
 
@@ -77,4 +63,4 @@ export default async function handler(req, res) {
   }
 
   return res.status(200).json({ received: true });
-}
+};
