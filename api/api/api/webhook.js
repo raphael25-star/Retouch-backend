@@ -56,7 +56,6 @@ export default async function handler(req, res) {
     const invoice = event.data.object;
     const subscriptionId = invoice.subscription;
 
-    // Récupérer la subscription pour avoir les metadata
     const subscription = await stripe.subscriptions.retrieve(subscriptionId);
     const userId = subscription.metadata?.userId;
 
@@ -68,7 +67,6 @@ export default async function handler(req, res) {
         .single();
 
       if (profile && !profile.unlimited) {
-        // Renouveler les crédits pour le plan Pro
         const credits = profile.plan === "Pro" ? 500 : 0;
         await supabase
           .from("profiles")
