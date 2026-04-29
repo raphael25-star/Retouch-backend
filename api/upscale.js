@@ -1,4 +1,5 @@
 const { createClient } = require("@supabase/supabase-js");
+const FormData = require("form-data");
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const CREDITS_PER_IMAGE = 10;
@@ -33,14 +34,30 @@ module.exports = async function handler(req, res) {
     const { image_url, prompt } = req.body;
     if (!image_url) return res.status(400).json({ error: "Image requise" });
 
-    const finalPrompt = prompt || "Recreate this exact photo as an ultra high resolution 4K professional photograph. Enhance all details: skin pores, hair strands, fabric textures, background details. Sharp focus, realistic lighting, natural colors. Keep the exact same person, pose, expression, clothing, and background.";
+    const finalPrompt = prompt || "Recreate this image in ultra high definition, realistic details, sharp focus, natural lighting. Preserve the original composition, subject and pose. Remove blur, noise and compression artifacts. Enhance textures and lighting while keeping a natural and realistic look..";
+
+    let imageBuffer;
+    if (image_url.startsWith("data:")) {
+      const base64Data = image_url.split(",")[1];
+      imageBuffer = Buffer.from(base64Data, "base64");
+    } else {
+      const imgRes = await fetch(image_url);
+      imageBuffer = Buffer.from(await imgRes.arrayBuffer());
+    }
+
+    const form = new FormData();
+    form.append("image", imageBuffer, { filename: "image.png", contentType: "image/png" });
+    form.append("prompt", finalPrompt);
+    form.append("model", "gpt-image-1");
+    form.append("size", "1024x1024");
 
     const openaiRes = await fetch("https://api.openai.com/v1/images/edits", {
       method: "POST",
       headers: {
         "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        ...form.getHeaders()
       },
-      body: await createFormData(image_url, finalPrompt)
+      body: form
     });
 
     const openaiData = await openaiRes.json();
@@ -68,26 +85,3 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Server error: " + err.message });
   }
 };
-
-async function createFormData(imageUrl, prompt) {
-  const { Blob } = require("buffer");
-  const FormData = require("form-data");
-
-  const form = new FormData();
-
-  if (imageUrl.startsWith("data:")) {
-    const base64Data = imageUrl.split(",")[1];
-    const buffer = Buffer.from(base64Data, "base64");
-    form.append("image", buffer, { filename: "image.png", contentType: "image/png" });
-  } else {
-    const imgRes = await fetch(imageUrl);
-    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
-    form.append("image", imgBuffer, { filename: "image.png", contentType: "image/png" });
-  }
-
-  form.append("prompt", prompt);
-  form.append("model", "gpt-image-1");
-  form.append("size", "1024x1024");
-
-  return form;
-}
