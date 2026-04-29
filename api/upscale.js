@@ -1,7 +1,6 @@
 const { createClient } = require("@supabase/supabase-js");
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
-
 const CREDITS_PER_IMAGE = 10;
 
 module.exports = async function handler(req, res) {
@@ -21,7 +20,7 @@ module.exports = async function handler(req, res) {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("credits, unlimited, plan")
+    .select("credits, unlimited, plan, images_generated")
     .eq("id", user.id)
     .single();
 
@@ -31,37 +30,23 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const { image_url } = req.body;
+    const { image_url, prompt } = req.body;
     if (!image_url) return res.status(400).json({ error: "Image requise" });
 
-    const falResponse = await fetch("https://queue.fal.run/fal-ai/esrgan", {
+    const finalPrompt = prompt || "Recreate this exact photo as an ultra high resolution 4K professional photograph. Enhance all details: skin pores, hair strands, fabric textures, background details. Sharp focus, realistic lighting, natural colors. Keep the exact same person, pose, expression, clothing, and background.";
+
+    const openaiRes = await fetch("https://api.openai.com/v1/images/edits", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Key " + process.env.FAL_KEY
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
       },
-      body: JSON.stringify({ image_url: image_url, scale: 4 })
+      body: await createFormData(image_url, finalPrompt)
     });
 
-    const falData = await falResponse.json();
+    const openaiData = await openaiRes.json();
 
-    if (falData.request_id) {
-      let result = null;
-      let attempts = 0;
-      while (!result && attempts < 60) {
-        await new Promise(r => setTimeout(r, 3000));
-        const statusRes = await fetch("https://queue.fal.run/fal-ai/esrgan/requests/" + falData.request_id, {
-          headers: { "Authorization": "Key " + process.env.FAL_KEY }
-        });
-        const statusData = await statusRes.json();
-        if (statusData.image) {
-          result = statusData.image.url;
-        } else if (statusData.status === "COMPLETED" && statusData.image) {
-          result = statusData.image.url;
-        }
-        attempts++;
-      }
-      if (!result) return res.status(504).json({ error: "Timeout" });
+    if (openaiData.data && openaiData.data[0]) {
+      const resultUrl = openaiData.data[0].url || openaiData.data[0].b64_json;
 
       if (!profile.unlimited) {
         await supabase.from("profiles").update({
@@ -74,22 +59,35 @@ module.exports = async function handler(req, res) {
         }).eq("id", user.id);
       }
 
-      return res.status(200).json({ image_url: result });
+      return res.status(200).json({ image_url: resultUrl });
     }
 
-    if (falData.image) {
-      if (!profile.unlimited) {
-        await supabase.from("profiles").update({
-          credits: profile.credits - CREDITS_PER_IMAGE,
-          images_generated: (profile.images_generated || 0) + 1
-        }).eq("id", user.id);
-      }
-      return res.status(200).json({ image_url: falData.image.url });
-    }
-
-    return res.status(500).json({ error: "Erreur fal.ai: " + JSON.stringify(falData) });
+    return res.status(500).json({ error: "Erreur OpenAI: " + JSON.stringify(openaiData) });
 
   } catch (err) {
     return res.status(500).json({ error: "Server error: " + err.message });
   }
 };
+
+async function createFormData(imageUrl, prompt) {
+  const { Blob } = require("buffer");
+  const FormData = require("form-data");
+
+  const form = new FormData();
+
+  if (imageUrl.startsWith("data:")) {
+    const base64Data = imageUrl.split(",")[1];
+    const buffer = Buffer.from(base64Data, "base64");
+    form.append("image", buffer, { filename: "image.png", contentType: "image/png" });
+  } else {
+    const imgRes = await fetch(imageUrl);
+    const imgBuffer = Buffer.from(await imgRes.arrayBuffer());
+    form.append("image", imgBuffer, { filename: "image.png", contentType: "image/png" });
+  }
+
+  form.append("prompt", prompt);
+  form.append("model", "gpt-image-1");
+  form.append("size", "1024x1024");
+
+  return form;
+}
