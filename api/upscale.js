@@ -1,8 +1,30 @@
 const { createClient } = require("@supabase/supabase-js");
+const https = require("https");
 const FormData = require("form-data");
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 const CREDITS_PER_IMAGE = 10;
+
+function callOpenAI(form) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: "api.openai.com",
+      path: "/v1/images/edits",
+      method: "POST",
+      headers: {
+        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
+        ...form.getHeaders()
+      }
+    };
+    const request = https.request(options, (response) => {
+      let data = "";
+      response.on("data", (chunk) => { data += chunk; });
+      response.on("end", () => { resolve(JSON.parse(data)); });
+    });
+    request.on("error", reject);
+    form.pipe(request);
+  });
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -34,7 +56,7 @@ module.exports = async function handler(req, res) {
     const { image_url, prompt } = req.body;
     if (!image_url) return res.status(400).json({ error: "Image requise" });
 
-    const finalPrompt = prompt || "Recreate this image in ultra high definition, realistic details, sharp focus, natural lighting. Preserve the original composition, subject and pose. Remove blur, noise and compression artifacts. Enhance textures and lighting while keeping a natural and realistic look..";
+    const finalPrompt = prompt || "Recreate this image in ultra high definition, realistic details, sharp focus, natural lighting. Preserve the original composition, subject and pose. Remove blur, noise and compression artifacts. Enhance textures and lighting while keeping a natural and realistic look.";
 
     let imageBuffer;
     if (image_url.startsWith("data:")) {
@@ -51,19 +73,13 @@ module.exports = async function handler(req, res) {
     form.append("model", "gpt-image-1");
     form.append("size", "1024x1024");
 
-    const openaiRes = await fetch("https://api.openai.com/v1/images/edits", {
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
-        ...form.getHeaders()
-      },
-      body: form
-    });
-
-    const openaiData = await openaiRes.json();
+    const openaiData = await callOpenAI(form);
 
     if (openaiData.data && openaiData.data[0]) {
-      const resultUrl = openaiData.data[0].url || openaiData.data[0].b64_json;
+      let resultUrl = openaiData.data[0].url;
+      if (!resultUrl && openaiData.data[0].b64_json) {
+        resultUrl = "data:image/png;base64," + openaiData.data[0].b64_json;
+      }
 
       if (!profile.unlimited) {
         await supabase.from("profiles").update({
