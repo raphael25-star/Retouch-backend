@@ -1,47 +1,21 @@
 const { createClient } = require("@supabase/supabase-js");
-const https = require("https");
-const FormData = require("form-data");
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
+
 const CREDITS_PER_IMAGE = 10;
 
-function callOpenAI(form) {
-  return new Promise((resolve, reject) => {
-    const options = {
-      hostname: "api.openai.com",
-      path: "/v1/images/edits",
-      method: "POST",
-      headers: {
-        "Authorization": "Bearer " + process.env.OPENAI_API_KEY,
-        ...form.getHeaders()
-      }
-    };
-    const request = https.request(options, (response) => {
-      let data = "";
-      response.on("data", (chunk) => { data += chunk; });
-      response.on("end", () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(new Error("Réponse OpenAI invalide: " + data.slice(0, 200)));
-        }
-      });
-    });
-    request.on("error", reject);
-    form.pipe(request);
-  });
-}
-
-// Mapping du ratio user vers la taille acceptée par GPT-Image
-// GPT-Image n'accepte que: 1024x1024, 1024x1536, 1536x1024
-function mapRatioToSize(ratio) {
+// Mapping du ratio user vers les ratios acceptés par Nano Banana Pro
+function mapRatioToAspect(ratio) {
   switch (ratio) {
-    case "1:1":  return "1024x1024";
-    case "9:16": return "1024x1536"; // vertical le plus proche
-    case "4:5":  return "1024x1536"; // vertical proche
-    case "3:4":  return "1024x1536"; // vertical proche
-    case "16:9": return "1536x1024"; // horizontal
-    default:     return "1024x1024";
+    case "1:1":  return "1:1";
+    case "9:16": return "9:16";
+    case "4:5":  return "4:5";
+    case "3:4":  return "3:4";
+    case "16:9": return "16:9";
+    default:     return "1:1";
   }
 }
 
@@ -52,6 +26,10 @@ module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
+  const API_KEY = process.env.KIE_API_KEY;
+  if (!API_KEY) return res.status(500).json({ error: "API key not configured" });
+
+  // ============ 1. AUTH ============
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Non authentifié" });
@@ -61,6 +39,7 @@ module.exports = async function handler(req, res) {
   const { data: { user }, error: authError } = await supabase.auth.getUser(token);
   if (authError || !user) return res.status(401).json({ error: "Token invalide" });
 
+  // ============ 2. CRÉDITS ============
   const { data: profile } = await supabase
     .from("profiles")
     .select("credits, unlimited, plan, images_generated")
@@ -72,82 +51,123 @@ module.exports = async function handler(req, res) {
     return res.status(403).json({ error: "Crédits insuffisants" });
   }
 
+  // ============ 3. GÉNÉRATION VIA NANO BANANA PRO ============
   try {
     const { image_url, prompt, ratio, resolution } = req.body;
     if (!image_url) return res.status(400).json({ error: "Image requise" });
 
-    // Prompt expert ultra-contraignant pour une recréation fidèle
-    const expertPrompt = "Restore the uploaded image into a sharper, realistic high-resolution version. This is a faithful restoration, not a remake. Use the uploaded image as the strict visual reference. Keep exactly the same: composition and crop, camera angle, pose and body position, facial structure, age, expression, and identity, clothing, accessories, belt, sunglasses, buttons, and fabric shape, background people and their position, lighting direction, flash look, colors, shadows, purple club lights, original party/nightclub atmosphere. Only improve: sharpness, realistic detail reconstruction, texture, noise reduction, resolution. Do not create a new photo. Do not modernize the scene. Do not make it look like a studio shoot. Do not beautify the people. Do not change faces, body shapes, clothes, background, or camera framing. Do not add new clothing details such as pockets, seams, buttons, belts, or accessories. The result must look like the same old low-quality photo restored in 4K, not a newly generated image.";
+    // Prompt expert généraliste pour restauration / amélioration HD hyper-réaliste
+    // Inspiré du master prompt Higgsfield - fonctionne pour tout type de photo
+    const expertPrompt = "Restore and enhance this image into a hyper-detailed, ultra-realistic high-resolution photograph. Preserve EXACTLY the subject's identity, age, gender, facial features, body type, and ethnicity as shown in the original image. Preserve EXACTLY the clothing, accessories, hair, pose, expression, and framing. Preserve EXACTLY the background, environment, and other people present in the scene. Apply hyper-detailed realism: visible skin pores, natural skin texture and imperfections, realistic hair strands, fabric texture, realistic shadows and lighting. Match the original light direction, color temperature, and atmosphere of the scene exactly - do not modernize, do not change to studio lighting. Apply realistic photographic qualities: organic sharpness, micro-contrast, slight digital grain, natural color rendering, smartphone photography aesthetic. The result should feel real, imperfect, human, and unretouched - like a genuine smartphone photo, not AI-generated, not polished, not beautified. Do NOT change the subject's age. Do NOT change the subject's identity. Do NOT add or remove people. Do NOT modify clothing or accessories. Do NOT modernize the scene. Do NOT make it look like a studio photo.";
 
-    // Si l'user a fourni un prompt additionnel, on l'ajoute en fin
+    // Si l'user a fourni un prompt additionnel, on l'ajoute
     const finalPrompt = prompt
       ? expertPrompt + " Additional user instructions: " + prompt
       : expertPrompt;
 
-    // Mapping du ratio choisi par l'user vers une taille OpenAI valide
-    const sizeForOpenAI = mapRatioToSize(ratio || "1:1");
+    // Mapping du ratio
+    const aspectRatio = mapRatioToAspect(ratio || "1:1");
 
-    // Conversion image en buffer
-    let imageBuffer;
+    // ─── LOGS ───
+    console.log("[Upscale Pro] User:", user.id);
+    console.log("[Upscale Pro] Plan:", profile.plan, "| Crédits:", profile.unlimited ? "illimité" : profile.credits);
+    console.log("[Upscale Pro] Ratio:", aspectRatio);
+    console.log("[Upscale Pro] Resolution user:", resolution);
+    console.log("[Upscale Pro] Modèle: nano-banana-pro");
+
+    // ============ 4. UPLOAD IMAGE BASE64 → URL Kie.ai ============
+    let imageUrlForKie = image_url;
     if (image_url.startsWith("data:")) {
-      const base64Data = image_url.split(",")[1];
-      imageBuffer = Buffer.from(base64Data, "base64");
-    } else {
-      const imgRes = await fetch(image_url);
-      imageBuffer = Buffer.from(await imgRes.arrayBuffer());
-    }
-
-    // ─── LOGS DÉTAILLÉS ───
-    console.log("[Upscale] User:", user.id);
-    console.log("[Upscale] Plan:", profile.plan, "| Crédits:", profile.unlimited ? "illimité" : profile.credits);
-    console.log("[Upscale] Ratio user:", ratio, "→ Size OpenAI:", sizeForOpenAI);
-    console.log("[Upscale] Resolution user (informatif, pas envoyé à OpenAI):", resolution);
-    console.log("[Upscale] Image buffer size:", (imageBuffer.length / 1024).toFixed(1), "KB");
-    console.log("[Upscale] Modèle: gpt-image-1");
-    console.log("[Upscale] Quality: high");
-    console.log("[Upscale] Prompt envoyé:", finalPrompt.slice(0, 200) + "...");
-
-    // Construction du form-data pour OpenAI
-    const form = new FormData();
-    form.append("image", imageBuffer, { filename: "image.png", contentType: "image/png" });
-    form.append("prompt", finalPrompt);
-    form.append("model", "gpt-image-1");
-    form.append("size", sizeForOpenAI);
-    form.append("quality", "high"); // qualité maximale pour rendu pro
-
-    const openaiData = await callOpenAI(form);
-
-    if (openaiData.data && openaiData.data[0]) {
-      let resultUrl = openaiData.data[0].url;
-      if (!resultUrl && openaiData.data[0].b64_json) {
-        resultUrl = "data:image/png;base64," + openaiData.data[0].b64_json;
-      }
-
-      console.log("[Upscale] ✓ Génération réussie | Taille résultat:", resultUrl.length > 100 ? (resultUrl.length / 1024).toFixed(1) + " KB (b64)" : resultUrl.slice(0, 80));
-
-      // Décompte des crédits
-      if (!profile.unlimited) {
-        await supabase.from("profiles").update({
-          credits: profile.credits - CREDITS_PER_IMAGE,
-          images_generated: (profile.images_generated || 0) + 1
-        }).eq("id", user.id);
-      } else {
-        await supabase.from("profiles").update({
-          images_generated: (profile.images_generated || 0) + 1
-        }).eq("id", user.id);
-      }
-
-      return res.status(200).json({
-        image_url: resultUrl,
-        credits_remaining: profile.unlimited ? "unlimited" : profile.credits - CREDITS_PER_IMAGE
+      console.log("[Upscale Pro] Upload base64 vers Kie.ai...");
+      const upRes = await fetch("https://kieai.redpandaai.co/api/file-base64-upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY },
+        body: JSON.stringify({
+          base64Data: image_url,
+          uploadPath: "images/retouch",
+          fileName: "upscale-" + Date.now() + ".png"
+        })
       });
+      const upData = await upRes.json();
+      if (!upData.data?.downloadUrl) {
+        console.error("[Upscale Pro] ✗ Upload échoué:", JSON.stringify(upData).slice(0, 200));
+        return res.status(400).json({ error: "Upload image failed" });
+      }
+      imageUrlForKie = upData.data.downloadUrl;
+      console.log("[Upscale Pro] ✓ Image uploadée:", imageUrlForKie.slice(0, 80));
     }
 
-    console.error("[Upscale] ✗ Erreur OpenAI:", JSON.stringify(openaiData).slice(0, 300));
-    return res.status(500).json({ error: "Erreur OpenAI: " + JSON.stringify(openaiData).slice(0, 200) });
+    // ============ 5. APPEL NANO BANANA PRO via Kie.ai ============
+    const finalInput = {
+      prompt: finalPrompt,
+      image_input: [imageUrlForKie],
+      aspect_ratio: aspectRatio
+    };
+
+    console.log("[Upscale Pro] Création tâche Kie.ai...");
+    const r1 = await fetch("https://api.kie.ai/api/v1/jobs/createTask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + API_KEY },
+      body: JSON.stringify({ model: "nano-banana-pro", input: finalInput })
+    });
+    const d1 = await r1.json();
+    const taskId = d1.data?.taskId || d1.data?.task_id;
+    if (!taskId) {
+      console.error("[Upscale Pro] ✗ Erreur création tâche:", JSON.stringify(d1).slice(0, 300));
+      return res.status(400).json({ error: d1.msg || d1.message || "Erreur création tâche" });
+    }
+    console.log("[Upscale Pro] ✓ Tâche créée:", taskId);
+
+    // ============ 6. POLLING DU RÉSULTAT ============
+    let result = null;
+    let attempts = 0;
+    while (!result && attempts < 60) {
+      await new Promise(r => setTimeout(r, 3000));
+      const r2 = await fetch("https://api.kie.ai/api/v1/jobs/recordInfo?taskId=" + taskId, {
+        headers: { "Authorization": "Bearer " + API_KEY }
+      });
+      const d2 = await r2.json();
+      if (d2.data?.state === "success" && d2.data?.resultJson) {
+        try {
+          const parsed = JSON.parse(d2.data.resultJson);
+          if (parsed.resultUrls && parsed.resultUrls.length > 0) result = parsed.resultUrls[0];
+          else if (parsed.image_url) result = parsed.image_url;
+          else result = d2.data.resultJson;
+        } catch (e) {
+          result = d2.data.resultJson;
+        }
+      } else if (d2.data?.state === "fail") {
+        const failMsg = d2.data?.failMsg || "Generation failed";
+        console.error("[Upscale Pro] ✗ Échec:", failMsg);
+        return res.status(500).json({ error: failMsg });
+      }
+      attempts++;
+    }
+    if (!result) {
+      console.error("[Upscale Pro] ✗ Timeout après 60 tentatives");
+      return res.status(504).json({ error: "Timeout" });
+    }
+    console.log("[Upscale Pro] ✓ Génération réussie");
+
+    // ============ 7. DÉCOMPTE CRÉDITS ============
+    if (!profile.unlimited) {
+      await supabase.from("profiles").update({
+        credits: profile.credits - CREDITS_PER_IMAGE,
+        images_generated: (profile.images_generated || 0) + 1
+      }).eq("id", user.id);
+    } else {
+      await supabase.from("profiles").update({
+        images_generated: (profile.images_generated || 0) + 1
+      }).eq("id", user.id);
+    }
+
+    return res.status(200).json({
+      image_url: result,
+      credits_remaining: profile.unlimited ? "unlimited" : profile.credits - CREDITS_PER_IMAGE
+    });
 
   } catch (err) {
-    console.error("[Upscale] ✗ Erreur serveur:", err.message);
+    console.error("[Upscale Pro] ✗ Erreur serveur:", err.message);
     return res.status(500).json({ error: "Server error: " + err.message });
   }
 };
